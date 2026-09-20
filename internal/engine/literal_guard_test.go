@@ -11,7 +11,7 @@ import (
 
 func TestLiteralGuardPublicScan(t *testing.T) {
 	tail := strings.Repeat(`[ab]x`, maxDFAProgram/2+1)
-	expression := `\bkey\b[^\n]*(?:\n[^\n]*){0,2}[ \t]--token ` + tail
+	expression := `\bkey\b[^\n]*(?:\n[^\n]*){0,2}[ \t]--token (?:ok|` + tail + `)`
 	db, err := Compile(&Pattern{Expression: expression, Flags: SomLeftMost})
 	if err != nil {
 		t.Fatal(err)
@@ -19,12 +19,24 @@ func TestLiteralGuardPublicScan(t *testing.T) {
 	if db.patterns[0].literalGuard == nil || db.patterns[0].literalGuard.newlines != 2 {
 		t.Fatal("missing bounded-newline guard")
 	}
+	if db.patterns[0].dfa != nil || len(db.patterns[0].prog.Inst) <= maxDFAProgram {
+		t.Fatal("pattern did not exercise the DFA program limit")
+	}
 	loaded, _ := roundTripDatabase(t, db)
 	control := *db
 	control.patterns = append([]compiledPattern(nil), db.patterns...)
 	control.patterns[0].literalGuard = nil
-	suffix := []byte(strings.Repeat("ax", maxDFAProgram/2+1))
+	// Keep the program above the DFA limit without a long tail in every case.
+	suffix := []byte("ok")
 	for _, candidate := range []*Database{db, loaded} {
+		longInput := []byte("key --token " + strings.Repeat("ax", maxDFAProgram/2+1))
+		for _, length := range []int{len(longInput), len(longInput) - 1} {
+			compareLoadedScan(t, &control, candidate, longInput[:length])
+			matched, err := candidate.Match(longInput[:length], nil)
+			if err != nil || matched != (length == len(longInput)) {
+				t.Fatalf("long tail length=%d Match=%v error=%v", length, matched, err)
+			}
+		}
 		for lines := 0; lines <= 3; lines++ {
 			for _, width := range []int{0, 15, maxLiteralGuardBytes - 10, maxLiteralGuardBytes, maxLiteralGuardBytes + 1} {
 				input := []byte("key" + strings.Repeat("\n", lines) + strings.Repeat("!", width) + " --token ")

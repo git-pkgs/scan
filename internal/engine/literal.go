@@ -4,13 +4,18 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"math/bits"
 	"regexp/syntax"
 	"sort"
 	"unicode"
 	"unicode/utf8"
 )
 
-const maxTriggerAlternatives = 64
+const (
+	maxTriggerAlternatives = 64
+	literalWordBits        = 64
+	denseLiteralThreshold  = 256
+)
 
 var asciiLower = func() [256]byte {
 	var table [256]byte
@@ -41,8 +46,7 @@ type literalMatcher struct {
 }
 
 type literalHashMatcher struct {
-	offsets  [1<<16 + 1]uint32
-	present  [1 << 10]uint64
+	literalIndex
 	buckets  []literalBucket
 	triggers []trigger
 	groups   []literalGroup
@@ -66,10 +70,72 @@ type literalGroup struct {
 }
 
 type triggerTable struct {
-	offsets    [1<<16 + 1]uint32
-	present    [1 << 10]uint64
+	literalIndex
 	triggerIDs []uint32
 	triggers   []trigger
+}
+
+type literalIndex struct {
+	offsets []uint32
+	present [1 << 10]uint64
+	ranks   [1 << 10]uint16
+}
+
+func (index *literalIndex) finish(length uint32) {
+	index.offsets = append(index.offsets, length)
+	if len(index.offsets) > denseLiteralThreshold {
+		index.makeDense()
+		return
+	}
+	var rank uint16
+	for i, word := range index.present {
+		index.ranks[i] = rank
+		rank += uint16(bits.OnesCount64(word))
+	}
+}
+
+func (index *literalIndex) makeDense() {
+	if len(index.offsets) == 1<<16+1 {
+		return
+	}
+	dense := make([]uint32, 1<<16+1)
+	index.expand(dense)
+	index.offsets = dense
+}
+
+func (m *literalMatcher) preferDenseOffsets() {
+	if len(m.hashed.triggers)+len(m.hashPairs.triggers) >= denseLiteralThreshold {
+		m.hashed.makeDense()
+		m.hashPairs.makeDense()
+	}
+}
+
+// bounds is called only for keys in the presence bitmap.
+func (index *literalIndex) bounds(key uint16) (uint32, uint32) {
+	if len(index.offsets) == 1<<16+1 {
+		return index.offsets[key], index.offsets[int(key)+1]
+	}
+	word, bit := key/literalWordBits, key%literalWordBits
+	rank := int(index.ranks[word]) + bits.OnesCount64(index.present[word]&((uint64(1)<<bit)-1))
+	return index.offsets[rank], index.offsets[rank+1]
+}
+
+func (index *literalIndex) expand(dense []uint32) {
+	if len(index.offsets) == len(dense) {
+		copy(dense, index.offsets)
+		return
+	}
+	if len(index.offsets) == 0 {
+		return
+	}
+	rank := 0
+	for key := range len(dense) - 1 {
+		dense[key] = index.offsets[rank]
+		if index.present[key/literalWordBits]&(uint64(1)<<(key%literalWordBits)) != 0 {
+			rank++
+		}
+	}
+	dense[len(dense)-1] = index.offsets[rank]
 }
 
 type triggerTableBuilder struct {
@@ -102,6 +168,7 @@ func newLiteralMatcher(triggers []trigger) literalMatcher {
 		hashed:    newLiteralHashMatcher(hashed),
 		hashPairs: hashPairs.build(),
 	}
+	matcher.preferDenseOffsets()
 	if len(matcher.hashed.groups) >= 64 {
 		matcher.fdr = compileFDR(&matcher)
 	}
@@ -172,8 +239,8 @@ func compileLiteralHashGroups(groups [][]trigger, costs map[uint32]int) literalH
 		heads[key] = uint32(len(entries))
 	}
 	for key, head := range heads {
-		matcher.offsets[key] = uint32(len(matcher.buckets))
 		if head != 0 {
+			matcher.offsets = append(matcher.offsets, uint32(len(matcher.buckets)))
 			matcher.present[key>>6] |= uint64(1) << (key & 63)
 		}
 		for entry := head; entry != 0; entry = entries[entry-1].next {
@@ -181,7 +248,7 @@ func compileLiteralHashGroups(groups [][]trigger, costs map[uint32]int) literalH
 			matcher.buckets = append(matcher.buckets, literalBucket{fragment: matcher.groups[group].fragment, group: group})
 		}
 	}
-	matcher.offsets[1<<16] = uint32(len(matcher.buckets))
+	matcher.finish(uint32(len(matcher.buckets)))
 	return matcher
 }
 
@@ -308,15 +375,15 @@ func (t *triggerTableBuilder) build() triggerTable {
 		triggers:   t.triggers,
 	}
 	for key, head := range t.heads {
-		result.offsets[key] = uint32(len(result.triggerIDs))
 		if head != 0 {
+			result.offsets = append(result.offsets, uint32(len(result.triggerIDs)))
 			result.present[key>>6] |= uint64(1) << (key & 63)
 		}
 		for entry := head; entry != 0; entry = t.entries[entry-1].next {
 			result.triggerIDs = append(result.triggerIDs, t.entries[entry-1].trigger)
 		}
 	}
-	result.offsets[1<<16] = uint32(len(result.triggerIDs))
+	result.finish(uint32(len(result.triggerIDs)))
 	return result
 }
 
@@ -456,7 +523,8 @@ func foldASCIIWord(value uint64) uint64 {
 }
 
 func (m *literalHashMatcher) confirm(data []byte, offset int, window uint32, key uint16, scratch *Scratch) {
-	for _, bucket := range m.buckets[m.offsets[key]:m.offsets[int(key)+1]] {
+	first, end := m.bounds(key)
+	for _, bucket := range m.buckets[first:end] {
 		if bucket.fragment != window {
 			continue
 		}
@@ -483,7 +551,8 @@ func (m *literalHashMatcher) confirm(data []byte, offset int, window uint32, key
 }
 
 func (t *triggerTable) confirm(data []byte, offset int, key uint16, scratch *Scratch) {
-	for _, triggerID := range t.triggerIDs[t.offsets[key]:t.offsets[int(key)+1]] {
+	first, end := t.bounds(key)
+	for _, triggerID := range t.triggerIDs[first:end] {
 		candidate := &t.triggers[triggerID]
 		if len(candidate.text) > 0 {
 			start := offset + 1 - len(candidate.text)

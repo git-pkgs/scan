@@ -258,7 +258,8 @@ func (m *literalMatcher) scanHashUngrouped(data []byte, scratch *Scratch) {
 }
 
 func (m *literalHashMatcher) confirmUngrouped(data []byte, offset int, window uint32, key uint16, scratch *Scratch) {
-	for _, bucket := range m.buckets[m.offsets[key]:m.offsets[int(key)+1]] {
+	first, end := m.bounds(key)
+	for _, bucket := range m.buckets[first:end] {
 		triggerID := bucket.group
 		candidate := &m.triggers[triggerID]
 		if candidate.fragment != window {

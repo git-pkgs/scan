@@ -92,12 +92,9 @@ func leadingStartConstraint(re *syntax.Regexp, byteMode bool) startConstraint {
 	if !byteMode {
 		return startConstraint{}
 	}
-	parts := leadingParts(re)
+	parts := concatParts(re)
 	if len(parts) == 0 {
 		return startConstraint{}
-	}
-	if mask, ok := leadingPlusMask(parts[0]); ok {
-		return startConstraint{kind: startWithinClass, mask: mask}
 	}
 	if len(parts) < 2 || parts[0].Op != syntax.OpLiteral || len(parts[0].Rune) != 1 || parts[0].Rune[0] > 255 {
 		return startConstraint{}
@@ -106,10 +103,19 @@ func leadingStartConstraint(re *syntax.Regexp, byteMode bool) startConstraint {
 	if !ok || mask.contains(byte(parts[0].Rune[0])) {
 		return startConstraint{}
 	}
+	if expressionByteMask(parts[0]).count() != 1 {
+		return startConstraint{}
+	}
+	// Repeated delimiters can make LastIndexByte choose a later match start.
+	for _, part := range parts[2:] {
+		if expressionByteMask(part).contains(byte(parts[0].Rune[0])) {
+			return startConstraint{}
+		}
+	}
 	return startConstraint{kind: startAfterByte, value: byte(parts[0].Rune[0])}
 }
 
-func leadingParts(re *syntax.Regexp) []*syntax.Regexp {
+func concatParts(re *syntax.Regexp) []*syntax.Regexp {
 	for re.Op == syntax.OpCapture {
 		re = re.Sub[0]
 	}
@@ -125,12 +131,9 @@ func leadingParts(re *syntax.Regexp) []*syntax.Regexp {
 		case syntax.OpEmptyMatch, syntax.OpBeginLine, syntax.OpBeginText, syntax.OpWordBoundary, syntax.OpNoWordBoundary:
 			continue
 		case syntax.OpConcat:
-			parts = append(parts, leadingParts(child)...)
+			parts = append(parts, concatParts(child)...)
 		default:
 			parts = append(parts, child)
-		}
-		if len(parts) >= 2 {
-			break
 		}
 	}
 	return parts

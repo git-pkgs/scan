@@ -282,8 +282,11 @@ func TestRunGuardRejectsKeywordWithoutCredentialShape(t *testing.T) {
 
 func TestCompileFindsLeadingStartConstraints(t *testing.T) {
 	patterns := []*Pattern{
-		{Expression: `\{[^{]+"private_key"[^}]+\}`},
+		{Expression: `\{[^{]+"private_key"[^{}]+\}`},
 		{Expression: `\b([a-zA-Z0-9_-]+-[a-zA-Z0-9_-]+-PRD-[a-f0-9]{8})`},
+		{Expression: `\{[^{]+"private_key"[^}]+\}`},
+		{Expression: `(?i:a)b+:TOKEN`},
+		{Expression: `\s+\w+\s+=>\s`},
 	}
 	db, err := Compile(patterns...)
 	if err != nil {
@@ -294,6 +297,20 @@ func TestCompileFindsLeadingStartConstraints(t *testing.T) {
 	}
 	if db.patterns[1].start.kind != startWithinClass {
 		t.Fatalf("class constraint = %#v", db.patterns[1].start)
+	}
+	for _, pattern := range patterns[2:] {
+		expression, err := parseExpression(pattern.Expression, pattern.Flags)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := leadingStartConstraint(expression, true); got.kind != startUnbounded {
+			t.Errorf("%q: leading constraint = %#v", pattern.Expression, got)
+		}
+	}
+	for i, want := range []startConstraintKind{startUnbounded, startWithinClass, startWithinClass} {
+		if got := db.patterns[i+2].start; got.kind != want {
+			t.Errorf("%q: compiled constraint = %#v, want kind %d", patterns[i+2].Expression, got, want)
+		}
 	}
 	for input, want := range map[string]bool{
 		`prefix { ignored { "private_key":"value" } suffix`: true,

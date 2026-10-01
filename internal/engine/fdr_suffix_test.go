@@ -32,8 +32,8 @@ func compileLiteralChosenGroups(groups [][]trigger, choose func([]byte) (uint32,
 		heads[key] = uint32(len(entries))
 	}
 	for key, head := range heads {
-		matcher.offsets[key] = uint32(len(matcher.buckets))
 		if head != 0 {
+			matcher.offsets = append(matcher.offsets, uint32(len(matcher.buckets)))
 			matcher.present[key>>6] |= uint64(1) << (key & 63)
 		}
 		for entry := head; entry != 0; entry = entries[entry-1].next {
@@ -41,6 +41,6 @@ func compileLiteralChosenGroups(groups [][]trigger, choose func([]byte) (uint32,
 			matcher.buckets = append(matcher.buckets, literalBucket{fragment: matcher.groups[group].fragment, group: group})
 		}
 	}
-	matcher.offsets[1<<16] = uint32(len(matcher.buckets))
+	matcher.finish(uint32(len(matcher.buckets)))
 	return matcher
 }

@@ -239,21 +239,11 @@ func (c *databaseCodec) database(db *Database) {
 	codecSlice(c, &db.patterns, 64, c.pattern)
 	codecSlice(c, &db.always, 4, c.u32)
 	m := &db.matcher
-	for i := range m.hashed.offsets {
-		c.u32(&m.hashed.offsets[i])
-	}
-	for i := range m.hashed.present {
-		c.u64(&m.hashed.present[i])
-	}
+	c.literalIndex(&m.hashed.literalIndex)
 	codecSlice(c, &m.hashed.buckets, 8, func(b *literalBucket) { c.u32(&b.fragment); c.u32(&b.group) })
 	codecSlice(c, &m.hashed.triggers, 37, c.trigger)
 	codecSlice(c, &m.hashed.groups, 35, c.group)
-	for i := range m.hashPairs.offsets {
-		c.u32(&m.hashPairs.offsets[i])
-	}
-	for i := range m.hashPairs.present {
-		c.u64(&m.hashPairs.present[i])
-	}
+	c.literalIndex(&m.hashPairs.literalIndex)
 	codecSlice(c, &m.hashPairs.triggerIDs, 4, c.u32)
 	codecSlice(c, &m.hashPairs.triggers, 37, c.trigger)
 	codecOptional(c, &m.fdr, func(f *fdrMatcher) {
@@ -263,6 +253,7 @@ func (c *databaseCodec) database(db *Database) {
 		c.u64(&f.initial)
 	})
 	if c.reading && c.err == nil {
+		m.preferDenseOffsets()
 		lookups := make(map[[256]bool]*[256]bool)
 		intern := func(table **[256]bool) {
 			if *table == nil {
@@ -283,6 +274,38 @@ func (c *databaseCodec) database(db *Database) {
 			}
 		}
 	}
+}
+
+func (c *databaseCodec) literalIndex(index *literalIndex) {
+	// Keep the dense wire layout compatible with existing databases.
+	var dense [1<<16 + 1]uint32
+	if !c.reading {
+		index.expand(dense[:])
+	}
+	for i := range dense {
+		c.u32(&dense[i])
+	}
+	for i := range index.present {
+		c.u64(&index.present[i])
+	}
+	if !c.reading || c.err != nil {
+		return
+	}
+	if !validOffsets(dense[:], int(dense[len(dense)-1])) {
+		c.fail()
+		return
+	}
+	for key := range len(dense) - 1 {
+		present := index.present[key/literalWordBits]&(uint64(1)<<(key%literalWordBits)) != 0
+		if present != (dense[key] != dense[key+1]) {
+			c.fail()
+			return
+		}
+		if present {
+			index.offsets = append(index.offsets, dense[key])
+		}
+	}
+	index.finish(dense[len(dense)-1])
 }
 
 func (c *databaseCodec) pattern(p *compiledPattern) {

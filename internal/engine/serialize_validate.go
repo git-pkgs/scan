@@ -36,7 +36,7 @@ func validDatabase(db *Database) bool {
 		}
 	}
 	m := &db.matcher
-	if !validOffsets(m.hashed.offsets[:], len(m.hashed.buckets)) || !validOffsets(m.hashPairs.offsets[:], len(m.hashPairs.triggerIDs)) || !validIDs(m.hashPairs.triggerIDs, len(m.hashPairs.triggers)) {
+	if !validOffsets(m.hashed.offsets, len(m.hashed.buckets)) || !validOffsets(m.hashPairs.offsets, len(m.hashPairs.triggerIDs)) || !validIDs(m.hashPairs.triggerIDs, len(m.hashPairs.triggers)) {
 		return false
 	}
 	for _, bucket := range m.hashed.buckets {

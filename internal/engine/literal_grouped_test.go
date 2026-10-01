@@ -126,7 +126,8 @@ func (m *literalMatcher) scanHashGrouped(data []byte, scratch *Scratch) {
 }
 
 func (m *literalHashMatcher) confirmGrouped(data []byte, offset int, window uint32, key uint16, scratch *Scratch) {
-	for _, bucket := range m.buckets[m.offsets[key]:m.offsets[int(key)+1]] {
+	first, end := m.bounds(key)
+	for _, bucket := range m.buckets[first:end] {
 		groupID := bucket.group
 		group := &m.groups[groupID]
 		if group.fragment != window {

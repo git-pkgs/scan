@@ -431,6 +431,7 @@ func estimateSize(db *Database, triggers []trigger) int {
 	size := int(unsafe.Sizeof(*db))
 	size += len(db.patterns) * int(unsafe.Sizeof(compiledPattern{}))
 	size += len(db.always) * uint32Size
+	size += (len(db.matcher.hashed.offsets) + len(db.matcher.hashPairs.offsets)) * uint32Size
 	size += len(db.matcher.hashed.buckets) * int(unsafe.Sizeof(literalBucket{}))
 	size += len(db.matcher.hashed.groups) * int(unsafe.Sizeof(literalGroup{}))
 	size += len(db.matcher.hashPairs.triggerIDs) * uint32Size

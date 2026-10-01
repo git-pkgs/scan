@@ -38,7 +38,8 @@ func TestSecretsLiteralConfirmationDiagnostics(t *testing.T) {
 				continue
 			}
 			calls++
-			for _, bucket := range matcher.buckets[matcher.offsets[key]:matcher.offsets[int(key)+1]] {
+			first, end := matcher.bounds(key)
+			for _, bucket := range matcher.buckets[first:end] {
 				id := bucket.group
 				checks++
 				group := &matcher.groups[id]
